@@ -5,12 +5,18 @@ Created on Tue Nov 17 15:53:39 2020
 @author: THINKPAD
 """
 import numpy as np
-from collections import deque
+from scipy.optimize import differential_evolution as DE
 
+from collections import deque
+from rdkit import Chem
 from AlignmentInfo import AlignmentInfo
 from AtomGaussian import AtomGaussian
+#from GaussianVolume import GaussianVolume
 from GaussianVolume import GaussianVolume
+#from benderclient import Bender
 
+
+#%%
 '''    
 def func_qAq(Aij, ro):
     Aq = np.matmul(Aij, ro)
@@ -41,8 +47,11 @@ def overH(v2, Aq, Aij, overHessian):
     return
 '''
 '''14.2 µs ± 822 ns per loop (mean ± std. dev. of 7 runs, 100000 loops each)'''
+
 iu = np.triu_indices(4)
 il2 = np.tril_indices(4, k=-1)
+
+
 class ShapeAlignment(GaussianVolume):
     
     def __init__(self, gRef = GaussianVolume(), gDb = GaussianVolume()):
@@ -66,6 +75,150 @@ class ShapeAlignment(GaussianVolume):
         # clear the matirxmap
         self._matrixMap = np.nan * np.ndarray([self._maxSize-1,4,4])
         
+
+    def BlackBox_function(self):
+        
+        
+        
+        res = AlignmentInfo()
+        
+        
+        
+        
+        #suggestion = bender.suggest(metric="quaternion", optimizer="parzen_estimator")
+        
+        def inside_optimize(x):
+            
+            EPS = 0.03
+            
+            R_matrix = Rotation_Matrix(x)
+            
+            #Rotate all the atoms in database molecule first:
+            for k in range(self._dAtoms):
+                
+                self._gDb.gaussians[k].centre = np.matmul(R_matrix , self._gDb.gaussians[k].centre)
+            
+            
+            processQueue= deque() #Stores the pair of gaussians that needed to calculate overlap
+            overlap_volume = 0
+            
+            d1 = []
+            d2 = []
+            #N1 = self._gRef.levels[0] #Reference molecule
+            #N2 = self._gDb.levels[0] #Database molecule
+            '''loop over the atoms in both molecules'''
+        
+            for i in range(self._rAtoms):
+                for j in range(self._dAtoms):
+            
+                    
+                    
+                    
+                    Vij = atomIntersection(self._gRef.gaussians[i], self._gDb.gaussians[j])
+                
+                
+                    if Vij / (self._gRef.gaussians[i].volume + self._gDb.gaussians[j].volume - Vij) < EPS: continue
+                                        
+                    overlap_volume += Vij
+                
+                    #overlap_volume += V_ij
+                
+                    # Loop over child nodes and add to queue1
+                    d1 = self._gRef.childOverlaps[i]
+                    d2 = self._gDb.childOverlaps[j]
+           
+                    # First add (i,child(j))
+                    if d2 != None:
+                        for it2 in d2:
+                            processQueue.append([i,it2])
+        
+                    #Second add (child(i),j)
+                    if d1!= None:
+                        for it1 in d1:
+                            processQueue.append([it1,j])
+    
+            while len(processQueue) != 0: # loop when processQueue is not empty
+    
+                pair = processQueue.popleft()
+               
+                i = pair[0]
+                j = pair[1]
+        
+                
+                    
+                Vij = atomIntersection(self._gRef.gaussians[i], self._gDb.gaussians[j])
+                
+                
+                if Vij / (self._gRef.gaussians[i].volume + self._gDb.gaussians[j].volume - Vij) < EPS: continue
+                           
+                if ((self._gRef.gaussians[i].n + self._gDb.gaussians[j].n)%2) == 0: 
+            
+                    #overlap_volume += V_ij
+                    overlap_volume += Vij
+                else:
+                    #overlap_volume -= V_ij
+                    overlap_volume -= Vij
+                
+                d1 = self._gRef.childOverlaps[i]
+                d2 = self._gDb.childOverlaps[j]
+                
+                ####SAME HERE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                if d1 != None and self._gRef.gaussians[i].n >  self._gDb.gaussians[j].n:
+                    #Add (child(i),j)
+                    for it1 in d1:
+                        processQueue.append([it1,j])
+                
+                else: 
+                    if d2 != None:
+                            # add (i,child(j))
+                        for it2 in d2:
+                            processQueue.append([i,it2])
+                    if d1 != None and self._gDb.gaussians[j].n - self._gRef.gaussians[i].n < 2:
+                        # add (child(i),j)
+                        for it1 in d1:           
+                            processQueue.append([it1,j])
+                ####SAME ABOVE!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            
+            
+            
+            inverted_overlap = -overlap_volume
+        
+            return inverted_overlap
+        
+        
+        
+        
+        bounds = [(0, 2*np.pi), (0, 2*np.pi), (0, 2*np.pi)]
+        
+        result = DE(inside_optimize, bounds)      
+        
+        
+        print(result.x , result.fun)
+        
+        R_matrix = Rotation_Matrix(result.x)
+        
+        qw = np.sqrt(1 + R_matrix[0,0] + R_matrix[1,1] + R_matrix[2,2]) / 2
+        qx = (R_matrix[2,1] - R_matrix[1,2]) / (4 * qw)
+        qy = (R_matrix[0,2] - R_matrix[2,0]) / (4 * qw)
+        qz = (R_matrix[1,0] - R_matrix[0,1]) / (4 * qw)
+        
+        ro = np.array((qw , qx, qy, qz))
+        
+        q_value = np.linalg.norm(ro)
+        ro_norm = np.array((ro[0]/q_value, ro[1]/q_value, ro[2]/q_value, ro[3]/q_value ))
+        
+        res.overlap = result.fun
+        res.rotor = ro_norm.copy()
+        
+        
+        return res
+        
+            
+    
+    
+    
+    
+        
     def gradientAscent(self, ro):
         
         EPS = 0.03
@@ -79,7 +232,8 @@ class ShapeAlignment(GaussianVolume):
         oldVolume = 0.0
         iterations = 0
         
-        while iterations <20:
+        
+        while iterations <20:    #iteration loop starts here
             atomOverlap = 0
             iterations += 1
             
@@ -87,6 +241,7 @@ class ShapeAlignment(GaussianVolume):
             overHessian = np.zeros((4,4))
             
             xlambda = 0
+            
             
             for i in range(self._rAtoms):
                 for j in range(self._dAtoms):
@@ -105,6 +260,11 @@ class ShapeAlignment(GaussianVolume):
                     Aq = np.matmul(Aij, ro) #Calculation of q′Aq, rotor product
                     qAq = np.matmul(ro, Aq)                
                     Vij = A16 * np.exp( -qAq )   #Volume overlap rewritten
+                    
+                    
+                    
+                    
+                    
                     
                     if  Vij/(self._gRef.gaussians[i].volume + self._gDb.gaussians[j].volume - Vij ) <EPS: continue
                         
@@ -226,6 +386,7 @@ class ShapeAlignment(GaussianVolume):
             ro /= nr
             
         return res
+    
     
     def simulatedAnnealing(self, ro):
         
@@ -434,9 +595,35 @@ class ShapeAlignment(GaussianVolume):
                 scaling_C = - a.weight * b.weight * (np.pi/(a.alpha + b.alpha))**1.5
             return A ,scaling_C                  
                             
-                
-                    
-                    
-            
-            
+        
+def Rotation_Matrix(x):
+        
+    
+    R_x = np.ndarray([3,3])  
+    R_x[0,0] = 1
+    R_x[1,0] = R_x[0,1] = R_x[2,0] = R_x[0,2] = 0
+    R_x[1,1] = R_x[2,2] = np.cos(x[0])
+    R_x[2,1] = np.sin(x[0])
+    R_x[1,2] = - R_x[2,1]
+    
+    R_y = np.ndarray([3,3])  
+    R_y[1,1] = 1
+    R_y[1,0] = R_y[1,2] = R_y[0,1] = R_y[2,1] = 0
+    R_y[0,0] = R_y[2,2] = np.cos(x[1])
+    R_y[0,2] = np.sin(x[1])
+    R_y[2,0] = - R_y[0,2]
+    
+    R_z = np.ndarray([3,3])  
+    R_z[2,2] = 1
+    R_z[2,0] = R_z[2,1] = R_z[0,2] = R_z[1,2] = 0
+    R_z[0,0] = R_z[1,1] = np.cos(x[2])
+    R_z[1,0] = np.sin(x[2])
+    R_z[0,1] = - R_z[1,0]
+    
+    R_matrix_1 = np.matmul(R_x , R_y)
+    R_matrix = np.matmul(R_matrix_1 , R_z)
+
+    return R_matrix
+
+
             
